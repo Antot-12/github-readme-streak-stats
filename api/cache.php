@@ -10,7 +10,12 @@ declare(strict_types=1);
 
 // Default cache duration: 24 hours (in seconds)
 define("CACHE_DURATION", 24 * 60 * 60);
-define("CACHE_DIR", __DIR__ . "/../cache");
+
+/**
+ * Vercel/AWS Lambda filesystem is read-only except /tmp.
+ * Use a writable temp directory for caching.
+ */
+define("CACHE_DIR", sys_get_temp_dir() . "/streak-stats-cache");
 
 /**
  * Generate a cache key for a user's request
@@ -53,10 +58,13 @@ function getCacheFilePath(string $key): string
  */
 function ensureCacheDir(): bool
 {
-    if (!is_dir(CACHE_DIR)) {
-        return mkdir(CACHE_DIR, 0755, true);
+    if (is_dir(CACHE_DIR)) {
+        return true;
     }
-    return true;
+
+    // Suppress warnings to avoid "headers already sent" in HTTP responses
+    // and double-check with is_dir() for race conditions.
+    return @mkdir(CACHE_DIR, 0755, true) || is_dir(CACHE_DIR);
 }
 
 /**
@@ -83,11 +91,11 @@ function getCachedStats(string $user, array $options = [], int $maxAge = CACHE_D
 
     $fileAge = time() - $mtime;
     if ($fileAge > $maxAge) {
-        unlink($filePath);
+        @unlink($filePath);
         return null;
     }
 
-    $handle = fopen($filePath, "r");
+    $handle = @fopen($filePath, "r");
     if ($handle === false) {
         return null;
     }
@@ -137,7 +145,7 @@ function setCachedStats(string $user, array $options, array $stats): bool
         return false;
     }
 
-    $result = file_put_contents($filePath, $data, LOCK_EX);
+    $result = @file_put_contents($filePath, $data, LOCK_EX);
     if ($result === false) {
         error_log("Failed to write cache file: " . $filePath);
         return false;
@@ -172,7 +180,7 @@ function clearExpiredCache(int $maxAge = CACHE_DURATION): int
         }
         $fileAge = time() - $mtime;
         if ($fileAge > $maxAge) {
-            if (unlink($file)) {
+            if (@unlink($file)) {
                 $deleted++;
             }
         }
@@ -202,7 +210,7 @@ function clearUserCache(string $user): bool
     $filePath = getCacheFilePath($key);
 
     if (file_exists($filePath)) {
-        return unlink($filePath);
+        return @unlink($filePath);
     }
 
     return true;
